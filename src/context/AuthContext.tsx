@@ -76,13 +76,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!error && data) {
         let effectiveRole: UserRole = isJuniorAdmin ? 'admin' : (data.role || 'user');
         
-        // Update user status & last active timestamp in Supabase
-        await client.from('profiles').update({
-          role: effectiveRole,
-          last_sign_in_at: nowIso,
-          is_online: true,
-          updated_at: nowIso,
-        }).eq('id', userId);
+        try {
+          await client.from('profiles').update({
+            role: effectiveRole,
+            last_sign_in_at: nowIso,
+            is_online: true,
+            updated_at: nowIso,
+          }).eq('id', userId);
+        } catch {
+          // ignore network failure on update
+        }
 
         const updatedProfile: UserProfile = {
           ...data,
@@ -94,7 +97,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setProfile(updatedProfile);
         setRoleState(effectiveRole);
       } else {
-        // Create/upsert profile if missing
         const newProfile: UserProfile = {
           id: userId,
           email,
@@ -121,43 +123,54 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [fetchAllProfiles]);
 
   useEffect(() => {
+    // Safety watchdog: ensure loading is NEVER stuck true for more than 2 seconds
+    const timeout = setTimeout(() => {
+      setLoading(false);
+    }, 2000);
+
     if (!isConfigured) {
       setUser(null);
       setProfile(null);
       setRoleState('user');
       setLoading(false);
+      clearTimeout(timeout);
       return;
     }
 
-    const client = getSupabaseClient();
-    client.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
+    try {
+      const client = getSupabaseClient();
+      client.auth.getSession().then(({ data: { session } }) => {
+        if (session) {
+          setSession(session);
+          setUser(session.user);
+          loadProfile(session.user.id, session.user.email || '');
+        }
+        setLoading(false);
+      }).catch(() => {
+        setLoading(false);
+      });
+
+      const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
         setSession(session);
-        setUser(session.user);
-        loadProfile(session.user.id, session.user.email || '');
-      }
-      setLoading(false);
-    }).catch(() => {
-      setLoading(false);
-    });
+        setUser(session?.user || null);
+        if (session?.user) {
+          loadProfile(session.user.id, session.user.email || '');
+        } else {
+          setProfile(null);
+          setRoleState('user');
+        }
+        setLoading(false);
+      });
 
-    const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user || null);
-      if (session?.user) {
-        loadProfile(session.user.id, session.user.email || '');
-      } else {
-        setProfile(null);
-        setRoleState('user');
-      }
+      fetchAllProfiles();
+
+      return () => {
+        clearTimeout(timeout);
+        subscription.unsubscribe();
+      };
+    } catch {
       setLoading(false);
-    });
-
-    fetchAllProfiles();
-
-    return () => {
-      subscription.unsubscribe();
-    };
+    }
   }, [isConfigured, loadProfile, fetchAllProfiles]);
 
   const signUp = async (email: string, password: string, fullName: string, _initialRole: UserRole = 'user') => {
