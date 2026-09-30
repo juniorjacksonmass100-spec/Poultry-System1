@@ -11,7 +11,7 @@ export interface SupabaseConfig {
 }
 
 /**
- * Sanitizes input URL or key by trimming whitespace and removing outer quotes
+ * Sanitizes input URL or key by trimming whitespace and removing outer quotes or trailing slashes
  */
 export function sanitizeCredential(val: string | null | undefined): string {
   if (!val) return '';
@@ -23,6 +23,10 @@ export function sanitizeCredential(val: string | null | undefined): string {
   ) {
     cleaned = cleaned.slice(1, -1).trim();
   }
+  // Strip trailing slash if present on URL
+  if (cleaned.endsWith('/')) {
+    cleaned = cleaned.slice(0, -1);
+  }
   return cleaned;
 }
 
@@ -32,11 +36,16 @@ export function sanitizeCredential(val: string | null | undefined): string {
 export function isValidSupabaseKey(key: string | null | undefined): boolean {
   if (!key) return false;
   const clean = sanitizeCredential(key);
-  if (clean.includes('dummy') || clean.includes('your-anon-key') || clean.length < 25) {
+  if (
+    clean === '' ||
+    clean.includes('your-anon-key') ||
+    clean.includes('placeholder') ||
+    clean.includes('YOUR_') ||
+    clean.length < 20
+  ) {
     return false;
   }
-  // Supabase anon keys are JWTs that start with eyJ or newer project keys
-  return clean.startsWith('eyJ') || clean.startsWith('sb_') || clean.length > 40;
+  return true;
 }
 
 /**
@@ -45,17 +54,25 @@ export function isValidSupabaseKey(key: string | null | undefined): boolean {
 export function isValidSupabaseUrl(url: string | null | undefined): boolean {
   if (!url) return false;
   const clean = sanitizeCredential(url);
-  return clean.startsWith('https://') && clean.includes('supabase.co');
+  if (
+    clean === '' ||
+    clean.includes('placeholder') ||
+    clean.includes('your-project-id') ||
+    clean.includes('YOUR_')
+  ) {
+    return false;
+  }
+  return clean.startsWith('http://') || clean.startsWith('https://');
 }
 
 /**
  * Get active Supabase configuration:
- * 1. Checks environment variables VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY
+ * 1. Checks environment variables (VITE_SUPABASE_URL or other aliases)
  * 2. Fallbacks to localStorage config entered via in-app Settings or AuthModal
  */
 export function getSupabaseConfig(): SupabaseConfig {
-  const envUrl = sanitizeCredential(import.meta.env.VITE_SUPABASE_URL);
-  const envKey = sanitizeCredential(import.meta.env.VITE_SUPABASE_ANON_KEY);
+  const envUrl = sanitizeCredential(import.meta.env.VITE_SUPABASE_URL as string);
+  const envKey = sanitizeCredential(import.meta.env.VITE_SUPABASE_ANON_KEY as string);
 
   if (isValidSupabaseUrl(envUrl) && isValidSupabaseKey(envKey)) {
     return {
